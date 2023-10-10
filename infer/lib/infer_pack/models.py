@@ -41,7 +41,7 @@ class TextEncoder256(nn.Module):
         if f0 == True:
             self.emb_pitch = nn.Embedding(256, hidden_channels)  # pitch 256
         self.encoder = attentions.Encoder(
-            hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout
+            hidden_channels, filter_channels, n_heads, n_layers, kernel_size, float(p_dropout)
         )
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
@@ -88,12 +88,12 @@ class TextEncoder768(nn.Module):
         if f0 == True:
             self.emb_pitch = nn.Embedding(256, hidden_channels)  # pitch 256
         self.encoder = attentions.Encoder(
-            hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout
+            hidden_channels, filter_channels, n_heads, n_layers, kernel_size, float(p_dropout)
         )
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
     def forward(self, phone, pitch, lengths):
-        if pitch == None:
+        if pitch.ndim == 0: # pitch should be passed as an empty array
             x = self.emb_phone(phone)
         else:
             x = self.emb_phone(phone) + self.emb_pitch(pitch)
@@ -145,13 +145,13 @@ class ResidualCouplingBlock(nn.Module):
             )
             self.flows.append(modules.Flip())
 
-    def forward(self, x, x_mask, g=None, reverse=False):
+    def forward(self, x, x_mask, g=None, reverse: bool =False):
         if not reverse:
             for flow in self.flows:
                 x, _ = flow(x, x_mask, g=g, reverse=reverse)
         else:
-            for flow in reversed(self.flows):
-                x = flow(x, x_mask, g=g, reverse=reverse)
+            for flow in self.flows[::-1]:
+                x, _ = flow.forward(x, x_mask, g=g, reverse=reverse) # May not work properly
         return x
 
     def remove_weight_norm(self):
@@ -258,7 +258,7 @@ class Generator(torch.nn.Module):
             x = x + self.cond(g)
 
         for i in range(self.num_upsamples):
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = F.leaky_relu(x, 0.1)
             x = self.ups[i](x)
             xs = None
             for j in range(self.num_kernels):
@@ -321,7 +321,7 @@ class SineGen(torch.nn.Module):
             uv = uv.float()
         return uv
 
-    def forward(self, f0, upp):
+    def forward(self, f0, upp: float):
         """sine_tensor, uv = forward(f0)
         input F0: tensor(batchsize=1, length, dim=1)
                   f0 for unvoiced steps should be 0
@@ -333,7 +333,7 @@ class SineGen(torch.nn.Module):
             f0_buf = torch.zeros(f0.shape[0], f0.shape[1], self.dim, device=f0.device)
             # fundamental component
             f0_buf[:, :, 0] = f0[:, :, 0]
-            for idx in np.arange(self.harmonic_num):
+            for idx in range(self.harmonic_num):
                 f0_buf[:, :, idx + 1] = f0_buf[:, :, 0] * (
                     idx + 2
                 )  # idx + 2: the (idx+1)-th overtone, (idx+2)-th harmonic
@@ -415,17 +415,14 @@ class SourceModuleHnNSF(torch.nn.Module):
         self.l_linear = torch.nn.Linear(harmonic_num + 1, 1)
         self.l_tanh = torch.nn.Tanh()
 
-    def forward(self, x, upp=None):
-        if hasattr(self, "ddtype") == False:
-            self.ddtype = self.l_linear.weight.dtype
+    def forward(self, x, upp: float = 1.0):
         sine_wavs, uv, _ = self.l_sin_gen(x, upp)
         # print(x.dtype,sine_wavs.dtype,self.l_linear.weight.dtype)
         # if self.is_half:
         #     sine_wavs = sine_wavs.half()
         # sine_merge = self.l_tanh(self.l_linear(sine_wavs.to(x)))
         # print(sine_wavs.dtype,self.ddtype)
-        if sine_wavs.dtype != self.ddtype:
-            sine_wavs = sine_wavs.to(self.ddtype)
+        sine_wavs = sine_wavs.to(self.l_linear.weight.dtype)
         sine_merge = self.l_tanh(self.l_linear(sine_wavs))
         return sine_merge, None, None  # noise, uv
 
@@ -448,59 +445,26 @@ class GeneratorNSF(torch.nn.Module):
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
 
-        self.f0_upsamp = torch.nn.Upsample(scale_factor=np.prod(upsample_rates))
+        self.f0_upsamp = torch.nn.Upsample(scale_factor=float(np.prod(upsample_rates)))
         self.m_source = SourceModuleHnNSF(
             sampling_rate=sr, harmonic_num=0, is_half=is_half
         )
-        self.noise_convs = nn.ModuleList()
+        self.noise_convs = nn.ModuleDict()
         self.conv_pre = Conv1d(
             initial_channel, upsample_initial_channel, 7, 1, padding=3
         )
-        resblock = modules.ResBlock1 if resblock == "1" else modules.ResBlock2
 
-        self.ups = nn.ModuleList()
+        self.layers = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
-            c_cur = upsample_initial_channel // (2 ** (i + 1))
-            self.ups.append(
-                weight_norm(
-                    ConvTranspose1d(
-                        upsample_initial_channel // (2**i),
-                        upsample_initial_channel // (2 ** (i + 1)),
-                        k,
-                        u,
-                        padding=(k - u) // 2,
-                    )
-                )
-            )
-            if i + 1 < len(upsample_rates):
-                stride_f0 = np.prod(upsample_rates[i + 1 :])
-                self.noise_convs.append(
-                    Conv1d(
-                        1,
-                        c_cur,
-                        kernel_size=stride_f0 * 2,
-                        stride=stride_f0,
-                        padding=stride_f0 // 2,
-                    )
-                )
-            else:
-                self.noise_convs.append(Conv1d(1, c_cur, kernel_size=1))
+            self.layers.append(GeneratorNSFLayer(i,u,k,upsample_initial_channel, upsample_rates,resblock, resblock_kernel_sizes, resblock_dilation_sizes))
 
-        self.resblocks = nn.ModuleList()
-        for i in range(len(self.ups)):
-            ch = upsample_initial_channel // (2 ** (i + 1))
-            for j, (k, d) in enumerate(
-                zip(resblock_kernel_sizes, resblock_dilation_sizes)
-            ):
-                self.resblocks.append(resblock(ch, k, d))
-
+        ch = upsample_initial_channel // (2 ** len(self.layers))
         self.conv_post = Conv1d(ch, 1, 7, 1, padding=3, bias=False)
-        self.ups.apply(init_weights)
 
         if gin_channels != 0:
             self.cond = nn.Conv1d(gin_channels, upsample_initial_channel, 1)
 
-        self.upp = np.prod(upsample_rates)
+        self.upp = float(np.prod(upsample_rates))
 
     def forward(self, x, f0, g=None):
         har_source, noi_source, uv = self.m_source(f0, self.upp)
@@ -509,28 +473,79 @@ class GeneratorNSF(torch.nn.Module):
         if g is not None:
             x = x + self.cond(g)
 
-        for i in range(self.num_upsamples):
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
-            x = self.ups[i](x)
-            x_source = self.noise_convs[i](har_source)
-            x = x + x_source
-            xs = None
-            for j in range(self.num_kernels):
-                if xs is None:
-                    xs = self.resblocks[i * self.num_kernels + j](x)
-                else:
-                    xs += self.resblocks[i * self.num_kernels + j](x)
-            x = xs / self.num_kernels
+        for layer in self.layers:
+            x = layer(x, har_source)
+
         x = F.leaky_relu(x)
         x = self.conv_post(x)
         x = torch.tanh(x)
         return x
 
     def remove_weight_norm(self):
-        for l in self.ups:
-            remove_weight_norm(l)
+        for l in self.layers:
+            l.remove_weight_norm()
+        
+
+class GeneratorNSFLayer(torch.nn.Module):
+    def __init__(self, i, u, k, upsample_initial_channel, upsample_rates, resblock, resblock_kernel_sizes, resblock_dilation_sizes) -> None:
+        super().__init__()
+        self.num_kernels = len(resblock_kernel_sizes)
+        self.num_upsamples = len(upsample_rates)
+
+        c_cur = upsample_initial_channel // (2 ** (i + 1))
+
+        self.ups = weight_norm(
+                    ConvTranspose1d(
+                        upsample_initial_channel // (2**i),
+                        upsample_initial_channel // (2 ** (i + 1)),
+                        k,
+                        u,
+                        padding=(k - u) // 2,
+                    )
+                )
+        
+        if i + 1 < len(upsample_rates):
+            stride_f0 = int(np.prod(upsample_rates[i + 1 :]))
+            self.noise_convs = Conv1d(
+                    1,
+                    c_cur,
+                    kernel_size=stride_f0 * 2,
+                    stride=stride_f0,
+                    padding=stride_f0 // 2,
+                )
+        else:
+            self.noise_convs = Conv1d(1, c_cur, kernel_size=1)
+
+        resblock = modules.ResBlock1 if resblock == "1" else modules.ResBlock2
+
+        self.resblocks = nn.ModuleList()
+        for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes):
+            self.resblocks.append(resblock(c_cur, k, d))
+
+        init_weights(self.ups)
+
+
+
+    def forward(self, x: torch.Tensor, har_source: torch.Tensor) -> torch.Tensor :
+        x = F.leaky_relu(x, 0.1)
+        x = self.ups(x)
+        x_source = self.noise_convs(har_source)
+        x = x + x_source
+        xs = torch.zeros_like(x)
+        x_mask = torch.ones_like(x)
+        for resblock in self.resblocks:
+                xs += resblock(x, x_mask)
+        x = xs / self.num_kernels
+        return x
+
+    def remove_weight_norm(self):
+        remove_weight_norm(self.ups)
         for l in self.resblocks:
             l.remove_weight_norm()
+
+
+        
+
 
 
 sr2sr = {
@@ -659,6 +674,9 @@ class SynthesizerTrnMs256NSFsid(nn.Module):
         z = self.flow(z_p, x_mask, g=g, reverse=True)
         o = self.dec(z * x_mask, nsff0, g=g)
         return o, x_mask, (z, z_p, m_p, logs_p)
+    def __prepare_scriptable__(self):
+        self.remove_weight_norm()
+        return self
 
 
 class SynthesizerTrnMs768NSFsid(nn.Module):
@@ -780,6 +798,9 @@ class SynthesizerTrnMs768NSFsid(nn.Module):
         z = self.flow(z_p, x_mask, g=g, reverse=True)
         o = self.dec(z * x_mask, nsff0, g=g)
         return o, x_mask, (z, z_p, m_p, logs_p)
+    def __prepare_scriptable__(self):
+        self.remove_weight_norm()
+        return self
 
 
 class SynthesizerTrnMs256NSFsid_nono(nn.Module):
@@ -891,6 +912,10 @@ class SynthesizerTrnMs256NSFsid_nono(nn.Module):
         z = self.flow(z_p, x_mask, g=g, reverse=True)
         o = self.dec(z * x_mask, g=g)
         return o, x_mask, (z, z_p, m_p, logs_p)
+    
+    def __prepare_scriptable__(self):
+        self.remove_weight_norm()
+        return self
 
 
 class SynthesizerTrnMs768NSFsid_nono(nn.Module):
@@ -1002,6 +1027,10 @@ class SynthesizerTrnMs768NSFsid_nono(nn.Module):
         z = self.flow(z_p, x_mask, g=g, reverse=True)
         o = self.dec(z * x_mask, g=g)
         return o, x_mask, (z, z_p, m_p, logs_p)
+    
+    def __prepare_scriptable__(self):
+        self.remove_weight_norm()
+        return self
 
 
 class MultiPeriodDiscriminator(torch.nn.Module):
@@ -1085,7 +1114,7 @@ class DiscriminatorS(torch.nn.Module):
 
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = F.leaky_relu(x, 0.1)
             fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)
@@ -1169,7 +1198,7 @@ class DiscriminatorP(torch.nn.Module):
 
         for l in self.convs:
             x = l(x)
-            x = F.leaky_relu(x, modules.LRELU_SLOPE)
+            x = F.leaky_relu(x, 0.1)
             fmap.append(x)
         x = self.conv_post(x)
         fmap.append(x)

@@ -1,4 +1,5 @@
 import math
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -42,7 +43,7 @@ def rand_gumbel_like(x):
     return g
 
 
-def slice_segments(x, ids_str, segment_size=4):
+def slice_segments(x, ids_str, segment_size: int=4):
     ret = torch.zeros_like(x[:, :, :segment_size])
     for i in range(x.size(0)):
         idx_str = ids_str[i]
@@ -51,7 +52,7 @@ def slice_segments(x, ids_str, segment_size=4):
     return ret
 
 
-def slice_segments2(x, ids_str, segment_size=4):
+def slice_segments2(x, ids_str, segment_size : int=4):
     ret = torch.zeros_like(x[:, :segment_size])
     for i in range(x.size(0)):
         idx_str = ids_str[i]
@@ -60,7 +61,7 @@ def slice_segments2(x, ids_str, segment_size=4):
     return ret
 
 
-def rand_slice_segments(x, x_lengths=None, segment_size=4):
+def rand_slice_segments(x, x_lengths=None, segment_size: int=4):
     b, d, t = x.size()
     if x_lengths is None:
         x_lengths = t
@@ -113,9 +114,11 @@ def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
     return acts
 
 
-def convert_pad_shape(pad_shape):
+def convert_pad_shape(pad_shape: List[List[int]]) -> List[int]:
     l = pad_shape[::-1]
-    pad_shape = [item for sublist in l for item in sublist]
+    pad_shape: List[int] = []
+    for sublist in l :
+        pad_shape += [item  for item in sublist]
     return pad_shape
 
 
@@ -124,7 +127,7 @@ def shift_1d(x):
     return x
 
 
-def sequence_mask(length, max_length=None):
+def sequence_mask(length, max_length: Optional[int] =None):
     if max_length is None:
         max_length = length.max()
     x = torch.arange(max_length, dtype=length.dtype, device=length.device)
