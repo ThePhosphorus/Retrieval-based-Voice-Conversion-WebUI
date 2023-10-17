@@ -62,16 +62,16 @@ conversion_weight_labels = {
 'enc_p.encoder.attn_layers.4.conv_o.weight': 'enc_p.encoder.layers.4.att.conv_o.weight',
 'enc_p.encoder.attn_layers.4.conv_o.bias':   'enc_p.encoder.layers.4.att.conv_o.bias',
 
-'enc_p.encoder.attn_layers.2.emb_rel_k':     'enc_p.encoder.layers.5.att.emb_rel_k',
-'enc_p.encoder.attn_layers.2.emb_rel_v':     'enc_p.encoder.layers.5.att.emb_rel_v',
-'enc_p.encoder.attn_layers.2.conv_q.weight': 'enc_p.encoder.layers.5.att.conv_q.weight',
-'enc_p.encoder.attn_layers.2.conv_q.bias':   'enc_p.encoder.layers.5.att.conv_q.bias',
-'enc_p.encoder.attn_layers.2.conv_k.weight': 'enc_p.encoder.layers.5.att.conv_k.weight',
-'enc_p.encoder.attn_layers.2.conv_k.bias':   'enc_p.encoder.layers.5.att.conv_k.bias',
-'enc_p.encoder.attn_layers.2.conv_v.weight': 'enc_p.encoder.layers.5.att.conv_v.weight',
-'enc_p.encoder.attn_layers.2.conv_v.bias':   'enc_p.encoder.layers.5.att.conv_v.bias',
-'enc_p.encoder.attn_layers.2.conv_o.weight': 'enc_p.encoder.layers.5.att.conv_o.weight',
-'enc_p.encoder.attn_layers.2.conv_o.bias':   'enc_p.encoder.layers.5.att.conv_o.bias',
+'enc_p.encoder.attn_layers.5.emb_rel_k':     'enc_p.encoder.layers.5.att.emb_rel_k',
+'enc_p.encoder.attn_layers.5.emb_rel_v':     'enc_p.encoder.layers.5.att.emb_rel_v',
+'enc_p.encoder.attn_layers.5.conv_q.weight': 'enc_p.encoder.layers.5.att.conv_q.weight',
+'enc_p.encoder.attn_layers.5.conv_q.bias':   'enc_p.encoder.layers.5.att.conv_q.bias',
+'enc_p.encoder.attn_layers.5.conv_k.weight': 'enc_p.encoder.layers.5.att.conv_k.weight',
+'enc_p.encoder.attn_layers.5.conv_k.bias':   'enc_p.encoder.layers.5.att.conv_k.bias',
+'enc_p.encoder.attn_layers.5.conv_v.weight': 'enc_p.encoder.layers.5.att.conv_v.weight',
+'enc_p.encoder.attn_layers.5.conv_v.bias':   'enc_p.encoder.layers.5.att.conv_v.bias',
+'enc_p.encoder.attn_layers.5.conv_o.weight': 'enc_p.encoder.layers.5.att.conv_o.weight',
+'enc_p.encoder.attn_layers.5.conv_o.bias':   'enc_p.encoder.layers.5.att.conv_o.bias',
 
 'enc_p.encoder.norm_layers_1.0.gamma' : 'enc_p.encoder.layers.0.norm_1.gamma',
 'enc_p.encoder.norm_layers_1.0.beta' :  'enc_p.encoder.layers.0.norm_1.beta',
@@ -394,6 +394,12 @@ model["config"][-3] = model["weight"]["emb_g.weight"].shape[0]
 from infer.lib.infer_pack.models import SynthesizerTrnMs768NSFsid
 
 net_g = SynthesizerTrnMs768NSFsid(*model["config"], is_half=False)
+
+model_params = [ item[0] for item in net_g.named_parameters()]
+save_params = list(new_weights.keys())
+
+diff_params = [ param for param in model_params if param not in save_params ]
+
 net_g.load_state_dict(model["weight"], strict=False)
 
 torch.save(model, "assets/weights/charlene_blanchette_modified.pth")
