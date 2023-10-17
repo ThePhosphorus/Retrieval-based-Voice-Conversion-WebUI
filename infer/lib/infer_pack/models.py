@@ -449,7 +449,6 @@ class GeneratorNSF(torch.nn.Module):
         self.m_source = SourceModuleHnNSF(
             sampling_rate=sr, harmonic_num=0, is_half=is_half
         )
-        self.noise_convs = nn.ModuleDict()
         self.conv_pre = Conv1d(
             initial_channel, upsample_initial_channel, 7, 1, padding=3
         )
@@ -542,11 +541,6 @@ class GeneratorNSFLayer(torch.nn.Module):
         remove_weight_norm(self.ups)
         for l in self.resblocks:
             l.remove_weight_norm()
-
-
-        
-
-
 
 sr2sr = {
     "32k": 32000,
