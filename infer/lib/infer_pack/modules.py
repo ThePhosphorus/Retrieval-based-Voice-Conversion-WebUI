@@ -1,5 +1,6 @@
 import copy
 import math
+from typing import Optional
 
 import numpy as np
 import scipy
@@ -14,7 +15,7 @@ from infer.lib.infer_pack.commons import get_padding, init_weights
 from infer.lib.infer_pack.transforms import piecewise_rational_quadratic_transform
 
 class LayerNorm(nn.Module):
-    def __init__(self, channels, eps=1e-5):
+    def __init__(self, channels: int, eps=1e-5):
         super().__init__()
         self.channels = channels
         self.eps = eps
@@ -114,7 +115,7 @@ class DDSConv(nn.Module):
             self.norms_1.append(LayerNorm(channels))
             self.norms_2.append(LayerNorm(channels))
 
-    def forward(self, x, x_mask, g=None):
+    def forward(self, x, x_mask, g: Optional[torch.Tensor]=None):
         if g is not None:
             x = x + g
         for i in range(self.n_layers):
@@ -132,12 +133,12 @@ class DDSConv(nn.Module):
 class WN(torch.nn.Module):
     def __init__(
         self,
-        hidden_channels,
-        kernel_size,
-        dilation_rate,
-        n_layers,
-        gin_channels=0,
-        p_dropout=0,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        n_layers: int,
+        gin_channels: int=0,
+        p_dropout: int=0,
     ):
         super(WN, self).__init__()
         assert kernel_size % 2 == 1
@@ -181,7 +182,7 @@ class WN(torch.nn.Module):
             res_skip_layer = torch.nn.utils.weight_norm(res_skip_layer, name="weight")
             self.res_skip_layers.append(res_skip_layer)
 
-    def forward(self, x, x_mask, g=None):
+    def forward(self, x, x_mask, g: Optional[torch.Tensor]=None):
         output = torch.zeros_like(x)
         n_channels_tensor = torch.IntTensor([self.hidden_channels])
 
@@ -292,7 +293,7 @@ class ResBlock1(torch.nn.Module):
         )
         self.convs2.apply(init_weights)
 
-    def forward(self, x, x_mask=None):
+    def forward(self, x, x_mask: Optional[torch.Tensor]=None):
         for c1, c2 in zip(self.convs1, self.convs2):
             xt = F.leaky_relu(x, 0.1)
             if x_mask is not None:
@@ -343,7 +344,7 @@ class ResBlock2(torch.nn.Module):
         )
         self.convs.apply(init_weights)
 
-    def forward(self, x, x_mask=None):
+    def forward(self, x, x_mask: Optional[torch.Tensor]=None):
         for c in self.convs:
             xt = F.leaky_relu(x, 0.1)
             if x_mask is not None:
@@ -374,7 +375,7 @@ class Flip(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, x, x_mask, g, reverse: bool =False):
+    def forward(self, x, x_mask, g: Optional[torch.Tensor], reverse: bool =False):
         x = torch.flip(x, [1])
         if not reverse:
             logdet = torch.zeros(x.size(0)).to(dtype=x.dtype, device=x.device)
@@ -436,7 +437,7 @@ class ResidualCouplingLayer(nn.Module):
         self.post.weight.data.zero_()
         self.post.bias.data.zero_()
 
-    def forward(self, x, x_mask, g=None, reverse: bool =False):
+    def forward(self, x, x_mask, g: Optional[torch.Tensor]=None, reverse: bool =False):
         x0, x1 = torch.split(x, [self.half_channels] * 2, 1)
         h = self.pre(x0) * x_mask
         h = self.enc(h, x_mask, g=g)
@@ -488,7 +489,7 @@ class ConvFlow(nn.Module):
         self.proj.weight.data.zero_()
         self.proj.bias.data.zero_()
 
-    def forward(self, x, x_mask, g=None, reverse: bool =False):
+    def forward(self, x, x_mask, g: Optional[torch.Tensor]=None, reverse: bool =False):
         x0, x1 = torch.split(x, [self.half_channels] * 2, 1)
         h = self.pre(x0)
         h = self.convs(h, x_mask, g=g)

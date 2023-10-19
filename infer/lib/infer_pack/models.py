@@ -1,5 +1,6 @@
 import math
 import logging
+from typing import List, Union, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -66,13 +67,13 @@ class TextEncoder256(nn.Module):
 class TextEncoder768(nn.Module):
     def __init__(
         self,
-        out_channels,
-        hidden_channels,
-        filter_channels,
-        n_heads,
-        n_layers,
-        kernel_size,
-        p_dropout,
+        out_channels: int,
+        hidden_channels: int,
+        filter_channels: int,
+        n_heads: int,
+        n_layers: int,
+        kernel_size: int,
+        p_dropout: Union[int, float],
         f0=True,
     ):
         super().__init__()
@@ -113,13 +114,13 @@ class TextEncoder768(nn.Module):
 class ResidualCouplingBlock(nn.Module):
     def __init__(
         self,
-        channels,
-        hidden_channels,
-        kernel_size,
-        dilation_rate,
-        n_layers,
-        n_flows=4,
-        gin_channels=0,
+        channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        n_layers: int,
+        n_flows: int=4,
+        gin_channels: int=0,
     ):
         super().__init__()
         self.channels = channels
@@ -145,7 +146,7 @@ class ResidualCouplingBlock(nn.Module):
             )
             self.flows.append(modules.Flip())
 
-    def forward(self, x, x_mask, g=None, reverse: bool =False):
+    def forward(self, x, x_mask, g: Optional[torch.Tensor]=None, reverse: bool =False):
         if not reverse:
             for flow in self.flows:
                 x, _ = flow(x, x_mask, g=g, reverse=reverse)
@@ -162,13 +163,13 @@ class ResidualCouplingBlock(nn.Module):
 class PosteriorEncoder(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        hidden_channels,
-        kernel_size,
-        dilation_rate,
-        n_layers,
-        gin_channels=0,
+        in_channels: int,
+        out_channels: int,
+        hidden_channels: int,
+        kernel_size: int,
+        dilation_rate: int,
+        n_layers: int,
+        gin_channels: int=0,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -189,7 +190,7 @@ class PosteriorEncoder(nn.Module):
         )
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
-    def forward(self, x, x_lengths, g=None):
+    def forward(self, x, x_lengths, g: Optional[torch.Tensor]=None):
         x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(
             x.dtype
         )
@@ -252,7 +253,7 @@ class Generator(torch.nn.Module):
         if gin_channels != 0:
             self.cond = nn.Conv1d(gin_channels, upsample_initial_channel, 1)
 
-    def forward(self, x, g=None):
+    def forward(self, x, g: Optional[torch.Tensor]=None):
         x = self.conv_pre(x)
         if g is not None:
             x = x + self.cond(g)
@@ -430,15 +431,15 @@ class SourceModuleHnNSF(torch.nn.Module):
 class GeneratorNSF(torch.nn.Module):
     def __init__(
         self,
-        initial_channel,
-        resblock,
-        resblock_kernel_sizes,
-        resblock_dilation_sizes,
-        upsample_rates,
-        upsample_initial_channel,
-        upsample_kernel_sizes,
-        gin_channels,
-        sr,
+        initial_channel:int,
+        resblock: str,
+        resblock_kernel_sizes: List[int],
+        resblock_dilation_sizes: List[List[int]],
+        upsample_rates: List[int],
+        upsample_initial_channel: int,
+        upsample_kernel_sizes: List[int],
+        gin_channels: int,
+        sr: int,
         is_half=False,
     ):
         super(GeneratorNSF, self).__init__()
@@ -465,7 +466,7 @@ class GeneratorNSF(torch.nn.Module):
 
         self.upp = float(np.prod(upsample_rates))
 
-    def forward(self, x, f0, g=None):
+    def forward(self, x, f0, g: Optional[torch.Tensor]=None):
         har_source, noi_source, uv = self.m_source(f0, self.upp)
         har_source = har_source.transpose(1, 2)
         x = self.conv_pre(x)
@@ -486,7 +487,7 @@ class GeneratorNSF(torch.nn.Module):
         
 
 class GeneratorNSFLayer(torch.nn.Module):
-    def __init__(self, i, u, k, upsample_initial_channel, upsample_rates, resblock, resblock_kernel_sizes, resblock_dilation_sizes) -> None:
+    def __init__(self, i: int, u: int, k: int, upsample_initial_channel: int, upsample_rates: List[int], resblock: str, resblock_kernel_sizes: List[int], resblock_dilation_sizes: List[List[int]]) -> None:
         super().__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
@@ -656,7 +657,7 @@ class SynthesizerTrnMs256NSFsid(nn.Module):
         o = self.dec(z_slice, pitchf, g=g)
         return o, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-    def infer(self, phone, phone_lengths, pitch, nsff0, sid, rate=None):
+    def infer(self, phone, phone_lengths, pitch, nsff0, sid, rate:Optional[int]=None):
         g = self.emb_g(sid).unsqueeze(-1)
         m_p, logs_p, x_mask = self.enc_p(phone, pitch, phone_lengths)
         z_p = (m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666) * x_mask
@@ -676,24 +677,24 @@ class SynthesizerTrnMs256NSFsid(nn.Module):
 class SynthesizerTrnMs768NSFsid(nn.Module):
     def __init__(
         self,
-        spec_channels,
-        segment_size,
-        inter_channels,
-        hidden_channels,
-        filter_channels,
-        n_heads,
-        n_layers,
-        kernel_size,
-        p_dropout,
-        resblock,
-        resblock_kernel_sizes,
-        resblock_dilation_sizes,
-        upsample_rates,
-        upsample_initial_channel,
-        upsample_kernel_sizes,
-        spk_embed_dim,
-        gin_channels,
-        sr,
+        spec_channels : int,
+        segment_size: int,
+        inter_channels: int,
+        hidden_channels: int,
+        filter_channels: int,
+        n_heads: int,
+        n_layers: int,
+        kernel_size: int,
+        p_dropout: Union[float, int],
+        resblock: str,
+        resblock_kernel_sizes: List[int],
+        resblock_dilation_sizes: List[List[int]],
+        upsample_rates: List[int],
+        upsample_initial_channel: int,
+        upsample_kernel_sizes: List[int],
+        spk_embed_dim: int,
+        gin_channels: int,
+        sr: int,
         **kwargs
     ):
         super().__init__()
@@ -780,11 +781,11 @@ class SynthesizerTrnMs768NSFsid(nn.Module):
         o = self.dec(z_slice, pitchf, g=g)
         return o, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-    def infer(self, phone, phone_lengths, pitch, nsff0, sid, rate=None):
+    def infer(self, phone, phone_lengths, pitch, nsff0, sid, rate:Optional[int]=None):
         g = self.emb_g(sid).unsqueeze(-1)
         m_p, logs_p, x_mask = self.enc_p(phone, pitch, phone_lengths)
         z_p = (m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666) * x_mask
-        if rate:
+        if rate is not None:
             head = int(z_p.shape[2] * rate)
             z_p = z_p[:, :, -head:]
             x_mask = x_mask[:, :, -head:]
@@ -895,7 +896,7 @@ class SynthesizerTrnMs256NSFsid_nono(nn.Module):
         o = self.dec(z_slice, g=g)
         return o, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-    def infer(self, phone, phone_lengths, sid, rate=None):
+    def infer(self, phone, phone_lengths, sid, rate:Optional[int]=None):
         g = self.emb_g(sid).unsqueeze(-1)
         m_p, logs_p, x_mask = self.enc_p(phone, None, phone_lengths)
         z_p = (m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666) * x_mask
@@ -1010,7 +1011,7 @@ class SynthesizerTrnMs768NSFsid_nono(nn.Module):
         o = self.dec(z_slice, g=g)
         return o, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-    def infer(self, phone, phone_lengths, sid, rate=None):
+    def infer(self, phone, phone_lengths, sid, rate: Optional[int]=None):
         g = self.emb_g(sid).unsqueeze(-1)
         m_p, logs_p, x_mask = self.enc_p(phone, None, phone_lengths)
         z_p = (m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666) * x_mask

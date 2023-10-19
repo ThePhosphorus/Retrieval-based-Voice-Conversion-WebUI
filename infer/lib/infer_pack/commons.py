@@ -61,7 +61,7 @@ def slice_segments2(x, ids_str, segment_size : int=4):
     return ret
 
 
-def rand_slice_segments(x, x_lengths=None, segment_size: int=4):
+def rand_slice_segments(x: torch.Tensor, x_lengths: Optional[int]=None, segment_size: int=4):
     b, d, t = x.size()
     if x_lengths is None:
         x_lengths = t

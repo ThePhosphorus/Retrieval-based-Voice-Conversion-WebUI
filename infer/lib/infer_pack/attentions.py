@@ -14,10 +14,10 @@ from infer.lib.infer_pack.modules import LayerNorm
 class Encoder(nn.Module):
     def __init__(
         self,
-        hidden_channels,
-        filter_channels,
-        n_heads,
-        n_layers,
+        hidden_channels: int,
+        filter_channels: int,
+        n_heads: int,
+        n_layers: int,
         kernel_size=1,
         p_dropout=0.0,
         window_size=10,
@@ -47,7 +47,7 @@ class Encoder(nn.Module):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, hidden_channels, n_heads, p_dropout, window_size,filter_channels, kernel_size, drop) -> None:
+    def __init__(self, hidden_channels: int, n_heads: int, p_dropout: float, window_size: int,filter_channels: int, kernel_size: int, drop: nn.Dropout) -> None:
         super().__init__()
         self.drop = drop
         self.att = MultiHeadAttention(
@@ -168,15 +168,15 @@ class Decoder(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(
         self,
-        channels,
-        out_channels,
-        n_heads,
-        p_dropout=0.0,
-        window_size=None,
-        heads_share=True,
-        block_length=None,
-        proximal_bias=False,
-        proximal_init=False,
+        channels: int,
+        out_channels: int,
+        n_heads: int,
+        p_dropout: float =0.0,
+        window_size: Optional[int]=None,
+        heads_share: bool =True,
+        block_length: Optional[int]=None,
+        proximal_bias: bool =False,
+        proximal_init: bool =False,
     ):
         super().__init__()
         assert channels % n_heads == 0
@@ -219,7 +219,7 @@ class MultiHeadAttention(nn.Module):
                 self.conv_k.weight.copy_(self.conv_q.weight)
                 self.conv_k.bias.copy_(self.conv_q.bias)
 
-    def forward(self, x, c, attn_mask=None):
+    def forward(self, x, c, attn_mask: Optional[torch.Tensor]=None):
         q = self.conv_q(x)
         k = self.conv_k(c)
         v = self.conv_v(c)
@@ -229,7 +229,7 @@ class MultiHeadAttention(nn.Module):
         x = self.conv_o(x)
         return x
 
-    def attention(self, query, key, value, mask=None):
+    def attention(self, query, key, value, mask: Optional[torch.Tensor]=None):
         # reshape [b, d, t] -> [b, n_h, t, d_k]
         b, d, t_s, t_t = (key.size(0), key.size(1), key.size(2), query.size(2))
         query = query.view(b, self.n_heads, self.k_channels, t_t).transpose(2, 3)
@@ -368,11 +368,11 @@ class MultiHeadAttention(nn.Module):
 class FFN(nn.Module):
     def __init__(
         self,
-        in_channels,
-        out_channels,
-        filter_channels,
-        kernel_size,
-        p_dropout=0.0,
+        in_channels: int,
+        out_channels: int,
+        filter_channels: int,
+        kernel_size: int,
+        p_dropout: float=0.0,
         activation="",
         causal=False,
     ):
