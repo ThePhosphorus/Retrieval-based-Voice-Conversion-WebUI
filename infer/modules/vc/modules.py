@@ -208,7 +208,7 @@ class VC:
                 protect,
                 f0_file,
             )
-            if self.tgt_sr != resample_sr >= 16000:
+            if self.tgt_sr != resample_sr >= 16000: # ??
                 tgt_sr = resample_sr
             else:
                 tgt_sr = self.tgt_sr

@@ -93,8 +93,8 @@ class TextEncoder768(nn.Module):
         )
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
-    def forward(self, phone, pitch, lengths):
-        if pitch.ndim == 0: # pitch should be passed as an empty array
+    def forward(self, phone, pitch: Optional[torch.Tensor], lengths):
+        if pitch is None:
             x = self.emb_phone(phone)
         else:
             x = self.emb_phone(phone) + self.emb_pitch(pitch)
@@ -781,7 +781,7 @@ class SynthesizerTrnMs768NSFsid(nn.Module):
         o = self.dec(z_slice, pitchf, g=g)
         return o, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-    def infer(self, phone, phone_lengths, pitch, nsff0, sid, rate:Optional[int]=None):
+    def infer(self, phone, phone_lengths, pitch: Optional[torch.Tensor], nsff0, sid, rate:Optional[int]=None):
         g = self.emb_g(sid).unsqueeze(-1)
         m_p, logs_p, x_mask = self.enc_p(phone, pitch, phone_lengths)
         z_p = (m_p + torch.exp(logs_p) * torch.randn_like(m_p) * 0.66666) * x_mask

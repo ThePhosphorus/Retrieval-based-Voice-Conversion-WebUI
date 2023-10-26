@@ -2,6 +2,8 @@ import pdb, os
 
 import numpy as np
 import torch
+from typing import Dict
+
 
 try:
     # Fix "Torch not compiled with CUDA enabled"
@@ -30,7 +32,7 @@ def window_sumsquare(
     hop_length=200,
     win_length=800,
     n_fft=800,
-    dtype=np.float32,
+    dtype=torch.float32,
     norm=None,
 ):
     """
@@ -61,7 +63,7 @@ def window_sumsquare(
         win_length = n_fft
 
     n = n_fft + hop_length * (n_frames - 1)
-    x = np.zeros(n, dtype=dtype)
+    x = torch.zeros(n, dtype=dtype)
 
     # Compute the squared window at the desired length
     win_sq = get_window(window, win_length, fftbins=True)
@@ -103,6 +105,7 @@ class STFT(torch.nn.Module):
         self.pad_amount = int(self.filter_length / 2)
         scale = self.filter_length / self.hop_length
         fourier_basis = np.fft.fft(np.eye(self.filter_length))
+        self.num_samples = 0
 
         cutoff = int((self.filter_length / 2 + 1))
         fourier_basis = np.vstack(
@@ -162,9 +165,9 @@ class STFT(torch.nn.Module):
         imag_part = forward_transform[:, cutoff:, :]
 
         magnitude = torch.sqrt(real_part**2 + imag_part**2)
-        # phase = torch.atan2(imag_part.data, real_part.data)
+        phase = torch.atan2(imag_part.data, real_part.data)
 
-        return magnitude  # , phase
+        return magnitude, phase
 
     def inverse(self, magnitude, phase):
         """Call the inverse STFT (iSTFT), given magnitude and phase tensors produced
@@ -228,8 +231,8 @@ class STFT(torch.nn.Module):
             reconstruction {tensor} -- Reconstructed audio given magnitude and phase. Of
                 shape (num_batch, num_samples)
         """
-        self.magnitude, self.phase = self.transform(input_data)
-        reconstruction = self.inverse(self.magnitude, self.phase)
+        magnitude, phase = self.transform(input_data)
+        reconstruction = self.inverse(magnitude, phase)
         return reconstruction
 
 
@@ -509,7 +512,7 @@ class MelSpectrogram(torch.nn.Module):
     ):
         super().__init__()
         n_fft = win_length if n_fft is None else n_fft
-        self.hann_window = {}
+        # self.hann_window: Dict[str, torch.Tensor] = dict()
         mel_basis = mel(
             sr=sampling_rate,
             n_fft=n_fft,
@@ -528,47 +531,30 @@ class MelSpectrogram(torch.nn.Module):
         self.clamp = clamp
         self.is_half = is_half
 
-    def forward(self, audio, keyshift=0, speed=1, center=True):
-        factor = 2 ** (keyshift / 12)
-        n_fft_new = int(np.round(self.n_fft * factor))
-        win_length_new = int(np.round(self.win_length * factor))
-        hop_length_new = int(np.round(self.hop_length * speed))
-        keyshift_key = str(keyshift) + "_" + str(audio.device)
-        if keyshift_key not in self.hann_window:
-            self.hann_window[keyshift_key] = torch.hann_window(win_length_new).to(
-                # "cpu"if(audio.device.type=="privateuseone") else audio.device
-                audio.device
-            )
-        # fft = torch.stft(#doesn't support pytorch_dml
-        #     # audio.cpu() if(audio.device.type=="privateuseone")else audio,
-        #     audio,
-        #     n_fft=n_fft_new,
-        #     hop_length=hop_length_new,
-        #     win_length=win_length_new,
-        #     window=self.hann_window[keyshift_key],
-        #     center=center,
-        #     return_complex=True,
-        # )
-        # magnitude = torch.sqrt(fft.real.pow(2) + fft.imag.pow(2))
-        # print(1111111111)
-        # print(222222222222222,audio.device,self.is_half)
-        if hasattr(self, "stft") == False:
-            # print(n_fft_new,hop_length_new,win_length_new,audio.shape)
-            self.stft = STFT(
-                filter_length=n_fft_new,
-                hop_length=hop_length_new,
-                win_length=win_length_new,
+        self.keyshift=0
+        self.speed=1
+        self.factor = 2 ** (self.keyshift / 12)
+        self.n_fft_new = int(round(self.n_fft * self.factor))
+        self.win_length_new = int(round(self.win_length * self.factor))
+        self.hop_length_new = int(round(self.hop_length * self.speed))
+
+        self.stft = STFT(
+                filter_length=self.n_fft_new,
+                hop_length=self.hop_length_new,
+                win_length=self.win_length_new,
                 window="hann",
-            ).to(audio.device)
+            )
+
+    def forward(self, audio, center=True):
         magnitude = self.stft.transform(audio)  # phase
         # if (audio.device.type == "privateuseone"):
         #     magnitude=magnitude.to(audio.device)
-        if keyshift != 0:
+        if self.keyshift != 0:
             size = self.n_fft // 2 + 1
             resize = magnitude.size(1)
             if resize < size:
                 magnitude = F.pad(magnitude, (0, 0, 0, size - resize))
-            magnitude = magnitude[:, :size, :] * self.win_length / win_length_new
+            magnitude = magnitude[:, :size, :] * self.win_length / self.win_length_new
         mel_output = torch.matmul(self.mel_basis, magnitude)
         if self.is_half == True:
             mel_output = mel_output.half()
@@ -577,8 +563,9 @@ class MelSpectrogram(torch.nn.Module):
         return log_mel_spec
 
 
-class RMVPE:
+class RMVPE(torch.nn.Module):
     def __init__(self, model_path, is_half, device=None):
+        super(RMVPE, self).__init__()
         self.resample_kernel = {}
         self.resample_kernel = {}
         self.is_half = is_half
@@ -634,16 +621,16 @@ class RMVPE:
 
     def infer_from_audio(self, audio, thred=0.03):
         # torch.cuda.synchronize()
-        t0 = ttime()
+        #t0 = ttime()
         mel = self.mel_extractor(
             torch.from_numpy(audio).float().to(self.device).unsqueeze(0), center=True
         )
         # print(123123123,mel.device.type)
         # torch.cuda.synchronize()
-        t1 = ttime()
+        #t1 = ttime()
         hidden = self.mel2hidden(mel)
         # torch.cuda.synchronize()
-        t2 = ttime()
+        #t2 = ttime()
         # print(234234,hidden.device.type)
         if "privateuseone" not in str(self.device):
             hidden = hidden.squeeze(0).cpu().numpy()
@@ -654,7 +641,7 @@ class RMVPE:
 
         f0 = self.decode(hidden, thred=thred)
         # torch.cuda.synchronize()
-        t3 = ttime()
+        #t3 = ttime()
         # print("hmvpe:%s\t%s\t%s\t%s"%(t1-t0,t2-t1,t3-t2,t3-t0))
         return f0
 
