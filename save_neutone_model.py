@@ -40,8 +40,8 @@ class CharleneModel(torch.nn.Module):
         self.bh = torch.from_numpy(self.bh)
         self.ah = torch.from_numpy(self.ah)
 
-        self.t_pad = 16_000
-        self.t_pad_tgt = 40_000
+        self.t_pad = 16_000 //2
+        self.t_pad_tgt = 40_000 //2
 
 
     def get_pitch(self, phone, transpose: int):
@@ -122,8 +122,8 @@ class CharleneModel(torch.nn.Module):
         phone = torchaudio.functional.filtfilt(phone[0], self.ah, self.bh)[None]
 
 
-        #audio_pad = phone.float()
-        audio_pad = F.pad(phone, (0, self.t_pad), mode="reflect").float()
+        audio_pad = phone.float()
+        #audio_pad = F.pad(phone, (0, self.t_pad), mode="reflect").float()
 
         p_len = audio_pad.shape[1] // self.window
 
@@ -145,16 +145,24 @@ class CharleneModel(torch.nn.Module):
         output = self.net_g.infer(features, phone_lengths, pitch, pitchf, sid)
         output = output[0][0, 0].data.float()
 
-        pad_size = (output.shape[0] - (input_shape * 40 // 16) ) - self.t_pad_tgt
+        # pad_size = (output.shape[0] - (input_shape * 40 // 16) ) - self.t_pad_tgt
 
-        output = (output[self.t_pad_tgt : -pad_size] if pad_size > 0 else output  )[None]
+        # output = (output[self.t_pad_tgt : -pad_size] if pad_size > 0 else output  )[None]
+        output = output[None]
 
         output = torchaudio.functional.resample(output, orig_freq=40000, new_freq=16000)
         return output
 
 class CharleneModelWrapper(WaveformToWaveformBase):
-    def __init__(self, model) -> None:
-        super().__init__(model, use_debug_mode= False)
+    def setup(self, buffer_size: int) :
+        self.buffer_size = int(buffer_size)
+        self.overlap_n_samples = self.model.t_pad
+        self.model_segment_size = self.buffer_size + self.overlap_n_samples
+        self.fade_up = torch.linspace(0,1, max(self.overlap_n_samples, 1))
+        self.fade_down = torch.linspace(1,0, max(self.overlap_n_samples, 1))
+        self.in_buf = torch.zeros(1 if self.is_input_mono() else 2, self.model_segment_size)
+        self.in_buf_tmp = torch.zeros(1 if self.is_input_mono() else 2, self.model_segment_size)
+        self.out_buf = torch.zeros(1 if self.is_input_mono() else 2, self.model_segment_size)
 
     def get_model_name(self) -> str:
         return "circonflex"
@@ -204,21 +212,46 @@ class CharleneModelWrapper(WaveformToWaveformBase):
     def get_native_sample_rates(self) -> List[int]:
         return [ 16000 ]  # Supports all sample rates
     
-    @torch.jit.export
-    def get_look_behind_samples(self) -> int:
-        return self.model.t_pad
+    # @torch.jit.export
+    # def get_look_behind_samples(self) -> int:
+    #     return self.model.t_pad
 
     @torch.jit.export
     def get_native_buffer_sizes(self) -> List[int]:
         return [16_000]  # Supports all buffer sizes
+    
+    def set_model_sample_rate_and_buffer_size(self, sample_rate: int, n_samples: int) -> bool:
+        self.setup(n_samples)
+        return True
+    
+    @torch.jit.export
+    def calc_min_delay_samples(self) -> int:
+        return self.overlap_n_samples
+    
+    @torch.jit.export
+    def reset(self) -> None:
+        self.in_buf.fill_(0)
+        self.in_buf_tmp.fill_(0)
+        self.out_buf.fill_(0)
 
     def aggregate_params(self, params: torch.Tensor) -> torch.Tensor:
         return params  # We want sample-level control, so no aggregation
 
+    @torch.no_grad()
     def do_forward_pass(self, x: torch.Tensor, params: Dict[str, torch.Tensor]) -> torch.Tensor:
-        with torch.no_grad():
-            x = self.model.forward(x)
-        return x
+        # Rotate previous input buffer to the left
+        self.in_buf[:, : self.overlap_n_samples] = self.in_buf[:, -self.overlap_n_samples:]
+        self.in_buf[:, -self.buffer_size:] = x
+
+        out = self.model.forward(self.in_buf)
+
+        # apply faders to the output buffer
+        self.out_buf[:, -self.overlap_n_samples:] *= self.fade_down
+        out[:, :self.overlap_n_samples] *= self.fade_up
+        out[:, :self.overlap_n_samples] += self.out_buf[:, -self.overlap_n_samples:]
+        self.out_buf = out
+
+        return out[:, :self.buffer_size]
     
 from pathlib import Path
 from neutone_sdk.utils import save_neutone_model, dump_samples_from_metadata
@@ -237,12 +270,12 @@ class DataHolder(torch.nn.Module):
 model = CharleneModel()
 wrapper = CharleneModelWrapper(model)
 
-input_sample = audio.AudioSample.from_file(Path(".") / "samples" / "Jon_Original.wav")
-rendered_sample = audio.render_audio_sample(wrapper, input_sample)
-sample_pair =  audio.AudioSamplePair(input_sample, rendered_sample)
-metadata = sample_pair.to_metadata_format()
-with open(Path(".") / "samples" / f"Jon_Modified_full6.mp3", "wb") as f:
-           f.write(rendered_sample.to_mp3_bytes())
+# input_sample = audio.AudioSample.from_file(Path(".") / "samples" / "Max_Original.wav")
+# rendered_sample = audio.render_audio_sample(wrapper, input_sample)
+# sample_pair =  audio.AudioSamplePair(input_sample, rendered_sample)
+# metadata = sample_pair.to_metadata_format()
+# with open(Path(".") / "samples" / f"Max_Modified_full6.mp3", "wb") as f:
+#            f.write(rendered_sample.to_mp3_bytes())
 
 # audio = torch.from_numpy(np.load("./original.npy"))[None]
 
@@ -251,4 +284,4 @@ with open(Path(".") / "samples" / f"Jon_Modified_full6.mp3", "wb") as f:
 # torchaudio.save('./samples/result_2.mp3', result, sample_rate= 16_000)
 
 
-# save_neutone_model(wrapper, Path.cwd(), dump_samples=True)
+save_neutone_model(wrapper, Path.cwd(), dump_samples=True)
