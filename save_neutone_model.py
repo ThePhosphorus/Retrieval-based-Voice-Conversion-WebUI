@@ -32,22 +32,16 @@ class CharleneModel(torch.nn.Module):
         self.net_g = SynthesizerTrnMs768NSFsid(*self.cpt["config"], is_half=False)
         self.net_g.load_state_dict(self.cpt["weight"], strict=False)
 
-        # bundle = torchaudio.pipelines.HUBERT_BASE
-        # self.hubert_model = bundle.get_model()
-        # self.hubert_model.load_state_dict(torch.load("assets/hubert/hubert_base.pt"))
-
-        models, _, _ = checkpoint_utils.load_model_ensemble_and_task(
-        ["assets/hubert/hubert_base.pt"],
-        suffix="")
-        self.hubert_model: hubert.BaseFairseqModel = models[0]
+        self.hubert_model = torchaudio.models.hubert_base()
+        self.hubert_model.load_state_dict(torch.load('assets/hubert/hubert_base_torch.pt'))
 
         self.crepe = torchcrepe.TorchCrepe('full', self.device)
         self.bh, self.ah = signal.butter(N=5, Wn=48, btype="high", fs=16_000)
         self.bh = torch.from_numpy(self.bh)
         self.ah = torch.from_numpy(self.ah)
 
-        self.t_pad = 16_000//2
-        self.t_pad_tgt = 40_000//2
+        self.t_pad = 16_000
+        self.t_pad_tgt = 40_000
 
 
     def get_pitch(self, phone, transpose: int):
@@ -123,33 +117,24 @@ class CharleneModel(torch.nn.Module):
 
     def forward(self, phone):
 
+        input_shape = phone.shape[1] - (self.t_pad)
         phone = phone.to(dtype=torch.float64)
         phone = torchaudio.functional.filtfilt(phone[0], self.ah, self.bh)[None]
 
-        input_shape = phone.shape
 
-        audio_pad = F.pad(phone, (self.t_pad, self.t_pad), mode="reflect").float()
+        #audio_pad = phone.float()
+        audio_pad = F.pad(phone, (0, self.t_pad), mode="reflect").float()
 
         p_len = audio_pad.shape[1] // self.window
 
-
-        padding_mask = torch.zeros_like(audio_pad).to(dtype=torch.bool).to(self.device)
-
-        # inputs = {
-        #     "source": audio_pad.to(self.device),
-        #     "padding_mask": padding_mask,
-        #     "output_layer": 12,
-        # }
-
-        features, _ = self.hubert_model.extract_features(source=audio_pad.to(self.device), padding_mask=padding_mask, output_layer= 12) # TO investigate why the model did not work
-        #features, _ = self.hubert_model(audio_pad.to(self.device)) # TO investigate why the model did not work
+        features, _ = self.hubert_model(audio_pad.to(self.device))
 
         features = F.interpolate(features.permute(0, 2, 1), scale_factor=2.0).permute(0, 2, 1)
 
         if features.shape[1] < p_len:
             p_len = features.shape[1]
 
-        pitch, pitchf = self.get_pitch(audio_pad, 12) # Does not match up
+        pitch, pitchf = self.get_pitch(audio_pad, 6)
         
         pitch = pitch[:, :p_len]
         pitchf = pitchf[:, :p_len]
@@ -158,11 +143,13 @@ class CharleneModel(torch.nn.Module):
         sid = torch.LongTensor([0]).to(self.device)  # Speaker ID
         
         output = self.net_g.infer(features, phone_lengths, pitch, pitchf, sid)
-        output = output[0][0, 0].data.float()[self.t_pad_tgt : -self.t_pad_tgt][None]
+        output = output[0][0, 0].data.float()
+
+        pad_size = (output.shape[0] - (input_shape * 40 // 16) ) - self.t_pad_tgt
+
+        output = (output[self.t_pad_tgt : -pad_size] if pad_size > 0 else output  )[None]
 
         output = torchaudio.functional.resample(output, orig_freq=40000, new_freq=16000)
-        output = F.pad(output, (0, input_shape[1] - output.shape[1]))
-        print(output.shape)
         return output
 
 class CharleneModelWrapper(WaveformToWaveformBase):
@@ -216,6 +203,10 @@ class CharleneModelWrapper(WaveformToWaveformBase):
     @torch.jit.export
     def get_native_sample_rates(self) -> List[int]:
         return [ 16000 ]  # Supports all sample rates
+    
+    @torch.jit.export
+    def get_look_behind_samples(self) -> int:
+        return self.model.t_pad
 
     @torch.jit.export
     def get_native_buffer_sizes(self) -> List[int]:
@@ -246,11 +237,11 @@ class DataHolder(torch.nn.Module):
 model = CharleneModel()
 wrapper = CharleneModelWrapper(model)
 
-input_sample = audio.AudioSample.from_file("/mnt/c/Users/adema/Downloads/Jon_Original.wav")
+input_sample = audio.AudioSample.from_file(Path(".") / "samples" / "Jon_Original.wav")
 rendered_sample = audio.render_audio_sample(wrapper, input_sample)
 sample_pair =  audio.AudioSamplePair(input_sample, rendered_sample)
 metadata = sample_pair.to_metadata_format()
-with open(Path(".") / "samples" / f"Jon_Modified_full.mp3", "wb") as f:
+with open(Path(".") / "samples" / f"Jon_Modified_full6.mp3", "wb") as f:
            f.write(rendered_sample.to_mp3_bytes())
 
 # audio = torch.from_numpy(np.load("./original.npy"))[None]
