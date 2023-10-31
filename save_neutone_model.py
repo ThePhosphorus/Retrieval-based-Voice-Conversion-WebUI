@@ -115,7 +115,7 @@ class CharleneModel(torch.nn.Module):
         return torch.cat(pitch_result, 1), torch.cat(periodicity_result, 1)
 
 
-    def forward(self, phone):
+    def forward(self, phone: torch.Tensor, pitch: int):
 
         input_shape = phone.shape[1] - (self.t_pad)
         phone = phone.to(dtype=torch.float64)
@@ -134,7 +134,7 @@ class CharleneModel(torch.nn.Module):
         if features.shape[1] < p_len:
             p_len = features.shape[1]
 
-        pitch, pitchf = self.get_pitch(audio_pad, 6)
+        pitch, pitchf = self.get_pitch(audio_pad, pitch)
         
         pitch = pitch[:, :p_len]
         pitchf = pitchf[:, :p_len]
@@ -195,7 +195,7 @@ class CharleneModelWrapper(WaveformToWaveformBase):
 
     def get_neutone_parameters(self) -> List[NeutoneParameter]:
         return [
-            # NeutoneParameter("min", "min clip threshold", default_value=0.15),
+            NeutoneParameter("pitch", "pitch", default_value=0.5),
             # NeutoneParameter("max", "max clip threshold", default_value=0.15),
             # NeutoneParameter("gain", "scale clip threshold", default_value=1.0),
         ]
@@ -234,8 +234,8 @@ class CharleneModelWrapper(WaveformToWaveformBase):
         self.in_buf_tmp.fill_(0)
         self.out_buf.fill_(0)
 
-    def aggregate_params(self, params: torch.Tensor) -> torch.Tensor:
-        return params  # We want sample-level control, so no aggregation
+    #def aggregate_params(self, params: torch.Tensor) -> torch.Tensor:
+    #    return params  # We want sample-level control, so no aggregation
 
     @torch.no_grad()
     def do_forward_pass(self, x: torch.Tensor, params: Dict[str, torch.Tensor]) -> torch.Tensor:
@@ -243,7 +243,10 @@ class CharleneModelWrapper(WaveformToWaveformBase):
         self.in_buf[:, : self.overlap_n_samples] = self.in_buf[:, -self.overlap_n_samples:]
         self.in_buf[:, -self.buffer_size:] = x
 
-        out = self.model.forward(self.in_buf)
+        float_pitch = (params["pitch"].item() - 0.5) * 12
+        pitch = int(float_pitch)
+
+        out = self.model.forward(self.in_buf, pitch)
 
         # apply faders to the output buffer
         self.out_buf[:, -self.overlap_n_samples:] *= self.fade_down
